@@ -1,0 +1,20 @@
+# окружение
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# редакторы и ОС
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# результаты экспериментов (воспроизводятся из конфигов)
+experiments/results/

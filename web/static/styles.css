@@ -1,0 +1,140 @@
+:root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --border: #d9dce1;
+    --text: #1f2430;
+    --muted: #667085;
+    --accent: #2f6fed;
+    --accent-dark: #2459c4;
+    --start: #f08a24;
+    --error: #c0392b;
+    --ok: #1e8e5a;
+    --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+.topbar h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.badge {
+    padding: 2px 8px;
+    border: 1px solid var(--start);
+    border-radius: 999px;
+    color: var(--start);
+    font-size: 12px;
+}
+
+/* три зоны: настройки | холст | информация */
+.layout {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr) 240px;
+    gap: 16px;
+    align-items: start;
+    padding: 16px 20px;
+    max-width: 1700px;
+    margin: 0 auto;
+}
+
+.panel, .stage {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+}
+.panel section + section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+
+.hint { margin: 4px 0 8px; color: var(--muted); font-size: 12.5px; }
+.note { margin: 8px 0 0; padding: 6px 8px; border-radius: 6px; background: #fff6e5; color: #8a5a00; font-size: 12.5px; }
+code { font-size: 12px; background: #eef0f3; padding: 1px 4px; border-radius: 4px; }
+
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.field { margin-bottom: 12px; }
+.field .hint { margin-bottom: 0; }
+
+label { display: block; font-weight: 500; margin-bottom: 3px; }
+label.inline { display: flex; align-items: center; gap: 6px; margin: 0; }
+
+input[type="number"], textarea {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+    color: inherit;
+    font: inherit;
+}
+label.inline input { width: 90px; }
+textarea { resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; margin-bottom: 6px; }
+input:focus-visible, textarea:focus-visible, button:focus-visible, .file-btn:focus-within {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+input:disabled { background: #f0f1f3; color: var(--muted); }
+
+button, .file-btn {
+    display: inline-block;
+    padding: 7px 14px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+}
+button:hover:not(:disabled), .file-btn:hover { background: var(--accent-dark); }
+button.secondary, .file-btn {
+    background: var(--surface);
+    color: var(--accent);
+}
+button.secondary:hover:not(:disabled), .file-btn:hover { background: #eef3ff; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+
+.canvas-wrap {
+    width: 100%;
+    aspect-ratio: 10 / 7;
+    min-height: 320px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fbfbfc;
+    overflow: hidden;
+}
+/* размер в CSS-пикселях; число пикселей (width/height) выставляет app.js с учётом devicePixelRatio */
+canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+.status { min-height: 1.5em; margin: 10px 0 0; color: var(--muted); }
+.status.error { color: var(--error); }
+.status.ok { color: var(--ok); }
+
+dl.info { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; margin: 0; }
+dl.info dt { color: var(--muted); }
+dl.info dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+
+.legend { list-style: none; margin: 0; padding: 0; }
+.legend li { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.swatch { flex: none; width: 18px; height: 18px; display: inline-block; }
+.swatch.line { height: 3px; background: var(--accent); }
+.swatch.start { border-radius: 50%; background: var(--start); border: 2px solid var(--start); }
+.swatch.city { border-radius: 50%; background: #fff; border: 2px solid #3b4252; }
+
+@media (max-width: 1150px) {
+    .layout { grid-template-columns: 1fr; }
+    .stage { order: -1; }
+}
