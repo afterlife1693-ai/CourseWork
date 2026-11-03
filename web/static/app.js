@@ -1,16 +1,17 @@
 "use strict";
 
 /**
- * Логика страницы: ввод городов, запросы к серверу, кнопки.
- * Рисование — в render.js (Render.render), здесь только состояние и события.
+ * Логика страницы: ввод городов, запросы к серверу и кнопки.
+ * Рисованием занимается render.js (Render.render), а здесь только состояние и события.
  */
 (() => {
     const MIN_CITIES = 3;
     const MAX_CITIES = 50;
     const MAX_FILE_BYTES = 1024 * 1024;
     const RUN_DELAY_MS = 120;   // пауза между итерациями в режиме «Запуск»
-    const MIN_PIXEL_GAP = 14;   // города ближе этого расстояния (в пикселях) не добавляем
+    const MIN_PIXEL_GAP = 14;   // ближе этого расстояния (в пикселях) новый город не ставится
     const SESSION_KEY = "aco_session_id";
+    const EMPTY = "–";          // что показывать, когда значения ещё нет
 
     const $ = (id) => document.getElementById(id);
     const el = {
@@ -30,18 +31,16 @@
         world: Render.fitWorld([]),
         view: null,
         dpr: 1,
-        snapshot: null,         // последний снапшот с сервера (или null)
-        appliedParams: null,    // параметры, с которыми создан движок на сервере
+        snapshot: null,         // последний снапшот с сервера или null
+        appliedParams: null,    // параметры, с которыми на сервере создан движок
         sessionId: null,
-        synced: false,          // на сервере есть задача и движок, соответствующие экрану
-        busy: false,            // идёт запрос
+        synced: false,          // на сервере есть задача и движок, и они соответствуют тому, что на экране
+        busy: false,            // сейчас выполняется запрос
         running: false,         // работает цикл «Запуск»
-        inflight: null,
+        inflight: null,         // текущий запрос, чтобы дождаться его при сбросе
     };
 
-    // ------------------------------------------------------------------
     // Запросы к серверу
-    // ------------------------------------------------------------------
 
     class ApiError extends Error {
         constructor(message, code, status) {
@@ -55,10 +54,10 @@
 
     function setSessionId(id) {
         state.sessionId = id;
-        try { sessionStorage.setItem(SESSION_KEY, id); } catch (_) { /* не критично */ }
+        try { sessionStorage.setItem(SESSION_KEY, id); } catch (_) { /* не страшно */ }
     }
 
-    /** POST с JSON. fetch не считает 400 ошибкой, поэтому смотрим resp.ok сами. */
+    /** POST с JSON. fetch не считает ответ 400 ошибкой, поэтому resp.ok проверяем сами. */
     async function api(path, body = {}) {
         const headers = { "Content-Type": "application/json" };
         if (state.sessionId) headers["X-Session-Id"] = state.sessionId;
@@ -69,7 +68,7 @@
             throw new ApiError("Нет связи с сервером. Проверьте, что он запущен.", "network", 0);
         }
         let data = null;
-        try { data = await resp.json(); } catch (_) { /* ответ не JSON */ }
+        try { data = await resp.json(); } catch (_) { /* ответ не в формате JSON */ }
         if (!resp.ok) {
             throw new ApiError((data && data.error) || `Ошибка сервера (${resp.status}).`,
                 data && data.code, resp.status);
@@ -77,9 +76,7 @@
         return data;
     }
 
-    // ------------------------------------------------------------------
-    // Сообщения, кнопки, блок информации
-    // ------------------------------------------------------------------
+    // Сообщения, кнопки и блок информации
 
     function setStatus(text, kind = "") {
         el.status.textContent = text;
@@ -87,16 +84,16 @@
     }
 
     function fmt(value, digits = 2) {
-        return value === null || value === undefined ? "—" : Number(value).toFixed(digits);
+        return value === null || value === undefined ? EMPTY : Number(value).toFixed(digits);
     }
 
     function updateInfo() {
         const snap = state.snapshot;
         const nIter = state.appliedParams ? state.appliedParams.n_iter : readNumber("p-n_iter");
-        el.infoIter.textContent = snap ? `${snap.iteration} / ${nIter}` : "—";
-        el.infoBest.textContent = snap ? fmt(snap.best_length) : "—";
-        el.infoIterBest.textContent = snap ? fmt(snap.iter_best_length) : "—";
-        el.infoTime.textContent = snap && snap.iteration > 0 ? `${fmt(snap.time_ms, 1)} мс` : "—";
+        el.infoIter.textContent = snap ? `${snap.iteration} / ${nIter}` : EMPTY;
+        el.infoBest.textContent = snap ? fmt(snap.best_length) : EMPTY;
+        el.infoIterBest.textContent = snap ? fmt(snap.iter_best_length) : EMPTY;
+        el.infoTime.textContent = snap && snap.iteration > 0 ? `${fmt(snap.time_ms, 1)} мс` : EMPTY;
         el.infoCities.textContent = String(state.cities.length);
     }
 
@@ -107,7 +104,7 @@
         el.btnRun.disabled = !(idle && enough);
         el.btnPause.disabled = !state.running;
         el.btnReset.disabled = state.busy && !state.running;
-        const lockData = state.busy || state.running; // города и параметры не трогаем во время работы
+        const lockData = state.busy || state.running; // пока идёт работа, города и параметры менять нельзя
         for (const input of paramInputs) input.disabled = lockData;
         for (const b of [el.btnRandom, el.btnClear, el.btnApplyText]) b.disabled = lockData;
         el.randN.disabled = el.randSeed.disabled = el.text.disabled = lockData;
@@ -118,9 +115,7 @@
         return Number($(id).value);
     }
 
-    // ------------------------------------------------------------------
     // Холст
-    // ------------------------------------------------------------------
 
     function rebuildView() {
         const rect = el.wrap.getBoundingClientRect();
@@ -130,7 +125,8 @@
     function resizeCanvas() {
         const rect = el.wrap.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return;
-        // width/height — число реальных пикселей; без этого картинка растянется и будет мутной
+        // Размер в пикселях задаём атрибутами width и height. Если оставить только CSS,
+        // картинка растянется и станет мутной.
         state.dpr = window.devicePixelRatio || 1;
         el.canvas.width = Math.round(rect.width * state.dpr);
         el.canvas.height = Math.round(rect.height * state.dpr);
@@ -144,20 +140,18 @@
         Render.render(ctx, { view: state.view, cities: state.cities, snapshot: state.snapshot });
     }
 
-    // ------------------------------------------------------------------
     // Города: изменение списка
-    // ------------------------------------------------------------------
 
     function formatCoord(v) {
         return String(Number(v.toFixed(4)));
     }
 
     function syncTextarea() {
-        if (document.activeElement === el.text) return; // не мешаем, пока пользователь печатает
+        if (document.activeElement === el.text) return; // пока человек печатает, текст не трогаем
         el.text.value = state.cities.map(([x, y]) => `${formatCoord(x)}, ${formatCoord(y)}`).join("\n");
     }
 
-    /** Любое изменение списка городов делает прежний прогон недействительным. */
+    /** После любого изменения списка городов предыдущий прогон теряет смысл. */
     function invalidateRun() {
         state.synced = false;
         state.snapshot = null;
@@ -184,7 +178,7 @@
         return true;
     }
 
-    /** Ищет дубликаты координат; возвращает текст ошибки или null. */
+    /** Ищет города с одинаковыми координатами. Возвращает текст ошибки или null. */
     function findDuplicate(cities) {
         const seen = new Map();
         for (let i = 0; i < cities.length; i++) {
@@ -210,7 +204,8 @@
         return best;
     }
 
-    /** Знаков после запятой для клика: чтобы при масштабе 0…1 координаты не округлялись до целых. */
+    /** Сколько знаков после запятой оставлять у города, поставленного кликом.
+     *  Если координаты лежат в диапазоне 0...1, округление до целых всё бы испортило. */
     function clickPrecision() {
         const span = Math.max(state.world.maxX - state.world.minX, state.world.maxY - state.world.minY, 1e-9);
         return Math.max(0, Math.min(6, 3 - Math.floor(Math.log10(span))));
@@ -224,7 +219,7 @@
         }
         const [px, py] = pointerPosition(event);
         if (nearestCity(px, py, MIN_PIXEL_GAP) !== -1) {
-            setStatus("Здесь уже есть город — выберите место подальше.", "error");
+            setStatus("Здесь уже есть город. Выберите место подальше.", "error");
             return;
         }
         const digits = clickPrecision();
@@ -234,7 +229,7 @@
     }
 
     function onCanvasContextMenu(event) {
-        event.preventDefault(); // вместо меню браузера — удаляем город под курсором
+        event.preventDefault(); // вместо меню браузера удаляем город под курсором
         if (!canEditData()) return;
         const [px, py] = pointerPosition(event);
         const id = nearestCity(px, py, Render.CITY_RADIUS + 4);
@@ -243,24 +238,23 @@
         setCities(state.cities.filter((_, i) => i !== id), { refit: false });
     }
 
-    // ------------------------------------------------------------------
     // Города: ввод из текста и файлов
-    // ------------------------------------------------------------------
 
-    /** Строка -> ячейки. Если есть «;», то это CSV из Excel: разделитель «;», десятичная запятая. */
+    /** Разбивает строку на ячейки. Если в ней есть «;», считаем это CSV из Excel:
+     *  разделитель «;», а десятичная запятая. */
     function splitLine(line) {
         if (line.includes(";")) return line.split(";").map((t) => t.trim().replace(",", "."));
         return line.trim().split(/[\s,]+/);
     }
 
     function toNumber(token) {
-        if (token === undefined || token.trim() === "") return NaN; // Number("") == 0 — не годится
+        if (token === undefined || token.trim() === "") return NaN; // Number("") равно 0, а нам нужна ошибка
         return Number(token);
     }
 
     /**
-     * Разбор текста «x, y» по строке (текстовое поле и CSV).
-     * Первая строка без цифр считается заголовком; если в ней есть колонки x и y — берём их.
+     * Разбирает текст вида «x, y» по строке (для текстового поля и для CSV).
+     * Первая строка без цифр считается заголовком. Если в ней есть колонки x и y, берём именно их.
      * Возвращает { cities } или { error }.
      */
     function parseCitiesText(text) {
@@ -271,7 +265,7 @@
             const line = lines[n];
             if (line.trim() === "") continue;
             const tokens = splitLine(line);
-            if (!startedData && !/\d/.test(line)) { // заголовок
+            if (!startedData && !/\d/.test(line)) { // это заголовок
                 const names = tokens.map((t) => t.toLowerCase());
                 if (names.includes("x") && names.includes("y")) { xi = names.indexOf("x"); yi = names.indexOf("y"); }
                 startedData = true;
@@ -297,7 +291,7 @@
         return { cities };
     }
 
-    /** JSON: {"cities": [[x, y], ...]}, просто [[x, y], ...] или [{"x":…, "y":…}, ...]. */
+    /** Понимает три вида JSON: {"cities": [[x, y], ...]}, просто [[x, y], ...] и [{"x": ..., "y": ...}, ...]. */
     function parseCitiesJson(text) {
         let data;
         try { data = JSON.parse(text); } catch (_) { return { error: "Файл не является корректным JSON." }; }
@@ -323,14 +317,14 @@
 
     function onApplyText() {
         if (!canEditData()) return;
-        el.text.blur(); // иначе syncTextarea() не обновит поле после успешной загрузки
-        // при ошибке текст пользователя остаётся как есть — его можно поправить
+        el.text.blur(); // иначе после успешной загрузки syncTextarea не обновит поле
+        // Если в тексте ошибка, он остаётся как есть, и его можно исправить.
         applyParsed(parseCitiesText(el.text.value), (n) => `Загружено городов: ${n}.`);
     }
 
     function onFileChosen() {
         const file = el.file.files[0];
-        el.file.value = ""; // чтобы тот же файл можно было выбрать повторно
+        el.file.value = ""; // чтобы тот же файл можно было выбрать ещё раз
         if (!file || !canEditData()) return;
         if (file.size > MAX_FILE_BYTES) { setStatus("Файл слишком большой (больше 1 МБ).", "error"); return; }
         const reader = new FileReader();
@@ -341,12 +335,10 @@
             const result = isJson ? parseCitiesJson(text) : parseCitiesText(text);
             applyParsed(result, (n) => `Из файла «${file.name}» загружено городов: ${n}.`);
         };
-        reader.readAsText(file); // файл пользователя не доверенный: ниже всё проверяется
+        reader.readAsText(file); // содержимому файла не доверяем, всё проверяется выше
     }
 
-    // ------------------------------------------------------------------
-    // Кнопки данных: случайные города, очистка
-    // ------------------------------------------------------------------
+    // Кнопки «Случайные города» и «Очистить»
 
     async function onRandom() {
         if (!canEditData()) return;
@@ -367,17 +359,15 @@
         setCities([], { refit: true });
     }
 
-    // ------------------------------------------------------------------
     // Параметры и работа алгоритма
-    // ------------------------------------------------------------------
 
-    /** Параметры из формы. Диапазоны окончательно проверяет сервер. */
+    /** Собирает параметры из формы. Допустимые диапазоны окончательно проверяет сервер. */
     function readParams() {
         const params = {};
         for (const key of ["n_ants", "alpha", "beta", "rho", "q", "n_iter"]) {
             const raw = $(`p-${key}`).value.trim();
             if (raw === "") {
-                if (key === "n_ants") continue; // пусто = по умолчанию (m = числу городов)
+                if (key === "n_ants") continue; // пустое поле значит «по умолчанию»: муравьёв столько же, сколько городов
                 throw new Error("Заполните все параметры алгоритма.");
             }
             const value = Number(raw);
@@ -387,7 +377,7 @@
         return params;
     }
 
-    /** Если на сервере ещё нет подходящих задачи и движка — создаёт их. */
+    /** Если на сервере ещё нет подходящих задачи и движка, создаёт их. */
     async function ensureReady() {
         if (state.synced) return;
         if (state.cities.length < MIN_CITIES) {
@@ -405,7 +395,7 @@
         updateInfo();
     }
 
-    /** Одна итерация. Возвращает true, если можно продолжать. */
+    /** Выполняет одну итерацию. Возвращает true, если можно продолжать. */
     async function stepOnce() {
         await ensureReady();
         const nIter = state.appliedParams.n_iter;
@@ -418,25 +408,25 @@
         updateInfo();
         const more = state.snapshot.iteration < nIter;
         if (more) setStatus("");
-        else setStatus(`Готово: ${nIter} итераций, лучший маршрут — ${fmt(state.snapshot.best_length)}.`, "ok");
+        else setStatus(`Готово: ${nIter} итераций, лучший маршрут: ${fmt(state.snapshot.best_length)}.`, "ok");
         return more;
     }
 
     /** Показывает понятное сообщение вместо трассировки в консоли. */
     function handleError(err) {
         if (err.code === "no_session" || err.code === "no_engine") {
-            // сервер перезапускали: состояние потеряно, при следующем действии создадим заново
+            // Сервер перезапускали, и его состояние потеряно. Задачу создадим заново при следующем действии.
             state.synced = false;
             state.snapshot = null;
             draw();
             updateInfo();
-            setStatus("Сессия на сервере устарела (сервер перезапускался). Нажмите «Шаг» — задача создастся заново.", "error");
+            setStatus("Сессия на сервере устарела (сервер перезапускался). Нажмите «Шаг», и задача создастся заново.", "error");
         } else {
             setStatus(err.message || "Что-то пошло не так.", "error");
         }
     }
 
-    /** Блокирует кнопки на время запроса: новый запрос — только после ответа на предыдущий. */
+    /** Блокирует кнопки на время запроса. Следующий запрос уходит только после ответа на предыдущий. */
     function withBusy(fn) {
         const promise = (async () => {
             state.busy = true;
@@ -482,7 +472,7 @@
 
     async function onReset() {
         state.running = false;
-        if (state.inflight) { try { await state.inflight; } catch (_) { /* уже показано */ } }
+        if (state.inflight) { try { await state.inflight; } catch (_) { /* ошибку уже показали */ } }
         const hadEngine = state.synced;
         invalidateRun();
         draw();
@@ -490,7 +480,7 @@
         updateButtons();
         setStatus("Сброшено. Параметры из формы применятся при следующем запуске.");
         if (hadEngine) {
-            try { await api("/api/reset"); } catch (_) { /* сервер мог перезапуститься — не страшно */ }
+            try { await api("/api/reset"); } catch (_) { /* сервер мог перезапуститься, это не страшно */ }
         }
     }
 
@@ -499,9 +489,7 @@
         updateInfo();
     }
 
-    // ------------------------------------------------------------------
     // Запуск
-    // ------------------------------------------------------------------
 
     el.canvas.addEventListener("click", onCanvasClick);
     el.canvas.addEventListener("contextmenu", onCanvasContextMenu);

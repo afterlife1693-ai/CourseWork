@@ -1,15 +1,15 @@
 "use strict";
 
 /**
- * Отрисовка холста. Здесь НЕТ запросов к серверу и состояния приложения:
- * render(ctx, state) только рисует то, что ему передали. На второй неделе
- * в render добавятся новые слои (феромон, пути муравьёв, подсветка шага).
+ * Отрисовка холста. Здесь нет ни запросов к серверу, ни состояния приложения:
+ * render(ctx, state) просто рисует то, что ему передали. Новые слои (феромон,
+ * пути муравьёв, подсветка шага) удобно добавлять прямо в render.
  *
- * Система координат:
- *   «мир»   — числа из задачи (x вправо, y ВВЕРХ, как на карте);
- *   «пиксели» — CSS-пиксели холста (x вправо, y ВНИЗ).
- * Перевод туда и обратно — worldToPx / pxToWorld. Все остальные функции
- * (клики, подсветка, феромон) должны пользоваться только ими.
+ * Координаты бывают двух видов:
+ *   «мир» это числа из задачи (x растёт вправо, y вверх, как на карте);
+ *   «пиксели» это CSS-пиксели холста (x растёт вправо, y вниз).
+ * Переводят одно в другое функции worldToPx и pxToWorld. Всему остальному коду
+ * (кликам, подсветке, феромону) стоит пользоваться только ими.
  */
 const Render = (() => {
     const PADDING = 40; // отступ от края холста, чтобы города не прилипали к рамке
@@ -25,7 +25,7 @@ const Render = (() => {
         hint: "#8a93a3",
     };
 
-    /** Прямоугольник «мира», вмещающий все города (пустой список -> стандартный). */
+    /** Прямоугольник «мира», в который помещаются все города. Для пустого списка берётся стандартный. */
     function fitWorld(cities) {
         if (!cities.length) return { ...DEFAULT_WORLD };
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -33,22 +33,22 @@ const Render = (() => {
             minX = Math.min(minX, x); maxX = Math.max(maxX, x);
             minY = Math.min(minY, y); maxY = Math.max(maxY, y);
         }
-        if (maxX === minX && maxY === minY) { // один город: рисуем в центре
+        if (maxX === minX && maxY === minY) { // город один, рисуем его в центре
             return { minX: minX - 1, maxX: maxX + 1, minY: minY - 1, maxY: maxY + 1 };
         }
         return { minX, maxX, minY, maxY };
     }
 
     /**
-     * Преобразование мир <-> пиксели для холста width × height (CSS-пикселей).
-     * Масштаб один для обеих осей (пропорции сохраняются), мир центрируется.
+     * Создаёт преобразование «мир <-> пиксели» для холста width × height (в CSS-пикселях).
+     * Масштаб одинаковый по обеим осям, чтобы пропорции не искажались, а мир стоит по центру.
      */
     function makeView(world, width, height) {
         const availW = Math.max(width - 2 * PADDING, 1);
         const availH = Math.max(height - 2 * PADDING, 1);
         const spanX = world.maxX - world.minX;
         const spanY = world.maxY - world.minY;
-        const sx = spanX > 0 ? availW / spanX : Infinity; // все города на одной вертикали
+        const sx = spanX > 0 ? availW / spanX : Infinity; // все города могут лежать на одной вертикали
         const sy = spanY > 0 ? availH / spanY : Infinity;
         const scale = Math.min(sx, sy);
         return {
@@ -58,7 +58,7 @@ const Render = (() => {
         };
     }
 
-    /** Мир -> пиксели. */
+    /** Из мира в пиксели. */
     function worldToPx(view, x, y) {
         return [
             view.offX + (x - view.world.minX) * view.scale,
@@ -66,7 +66,7 @@ const Render = (() => {
         ];
     }
 
-    /** Пиксели -> мир (обратная к worldToPx). */
+    /** Из пикселей в мир. Обратная операция к worldToPx. */
     function pxToWorld(view, px, py) {
         return [
             view.world.minX + (px - view.offX) / view.scale,
@@ -74,7 +74,7 @@ const Render = (() => {
         ];
     }
 
-    /** Замкнутая ломаная по номерам городов: после последнего — снова первый. */
+    /** Замкнутая ломаная по номерам городов: после последнего города линия возвращается к первому. */
     function drawTour(ctx, view, cities, tour, style) {
         if (!tour || tour.length < 2) return;
         ctx.save();
@@ -91,7 +91,7 @@ const Render = (() => {
         ctx.restore();
     }
 
-    /** Города: кружки с номерами (с нуля, как в API); стартовый — другого цвета. */
+    /** Города в виде кружков с номерами (с нуля, как в API). Стартовый город другого цвета. */
     function drawCities(ctx, view, cities, startId) {
         ctx.save();
         ctx.font = "600 11px system-ui, sans-serif";
@@ -114,8 +114,8 @@ const Render = (() => {
     }
 
     /**
-     * Нарисовать всё. state = { view, cities, snapshot }.
-     * Слои снизу вверх: маршрут, города. Перед рисованием холст очищается.
+     * Рисует всё. state = { view, cities, snapshot }.
+     * Слои идут снизу вверх: сначала маршрут, потом города. Перед рисованием холст очищается.
      */
     function render(ctx, state) {
         const { view, cities, snapshot } = state;

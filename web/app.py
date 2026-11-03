@@ -1,10 +1,10 @@
-"""Flask-сервер: страница и JSON API между браузером и движком ACO.
+"""Flask-сервер: страница и JSON API между браузером и движком муравьиного алгоритма.
 
-Запуск из корня проекта:  ``python run.py``  (или ``python -m web.app``).
+Запуск из корня проекта: python run.py (или python -m web.app).
 
-Состояние (задача и движок) хранится на сервере в словаре по идентификатору
-сессии. Идентификатор клиент получает при ``POST /api/instance`` и присылает
-дальше в заголовке ``X-Session-Id``. База данных не нужна.
+Состояние (задача и движок) лежит на сервере, в словаре сессий. Идентификатор
+сессии клиент получает от /api/instance и дальше присылает в заголовке
+X-Session-Id. База данных для этого не нужна.
 """
 
 from __future__ import annotations
@@ -16,9 +16,14 @@ from collections import OrderedDict
 from flask import Flask, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
-# Неделя 2: заменить одну строку на   from core.aco import ACO as Engine
-# (если конструктор ACO принимает не (cities, params), поправить создание ниже).
-from web.mock_aco import MockACO as Engine
+from core.aco import ACOParams
+from core.instance import TSPInstance
+
+# В core пока нет класса ACO, поэтому движком служит переходник на функциях ядра.
+# Когда ACO появится, достаточно заменить эту строку на
+#     from core.aco import ACO as Engine
+# и удалить web/core_engine.py. Конструктор у обоих одинаковый: Engine(instance, params).
+from web.core_engine import CoreEngine as Engine
 from web.validation import ApiError, parse_instance_request, parse_params
 
 SESSION_HEADER = "X-Session-Id"
@@ -32,17 +37,17 @@ HTTP_MESSAGES = {
 
 
 class Session:
-    """Состояние одного пользователя: задача, параметры, движок."""
+    """Состояние одного пользователя: задача, параметры и движок."""
 
     def __init__(self) -> None:
-        self.lock = threading.Lock()  # Flask по умолчанию многопоточный
-        self.cities: list | None = None
+        self.lock = threading.Lock()  # сервер Flask обрабатывает запросы в нескольких потоках
+        self.instance: TSPInstance | None = None  # задача из core
         self.params: dict | None = None
         self.engine = None
 
 
 class SessionStore:
-    """Словарь сессий с ограничением размера (самые давние удаляются)."""
+    """Словарь сессий с ограничением размера. Когда место кончается, удаляются самые давние."""
 
     def __init__(self, max_sessions: int = MAX_SESSIONS) -> None:
         self._items: OrderedDict[str, Session] = OrderedDict()
@@ -69,18 +74,18 @@ class SessionStore:
 
 
 def create_app(config: dict | None = None) -> Flask:
-    """Фабрика приложения (так проще тестировать: у каждого теста своё состояние)."""
+    """Собирает приложение. Так проще тестировать: у каждого теста своё состояние."""
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 МБ — с запасом для 50 городов
+    app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 МБ хватает с большим запасом
     app.config.update(config or {})
-    app.json.ensure_ascii = False  # кириллица в ответах читаема
+    app.json.ensure_ascii = False  # чтобы кириллица в ответах читалась как есть
     store = SessionStore()
     app.extensions["aco_sessions"] = store
 
-    # -- вспомогательное ----------------------------------------------------
+    # Вспомогательные функции
 
     def json_body() -> dict:
-        """Тело запроса как словарь; пустое тело = пустой словарь."""
+        """Тело запроса как словарь. Пустое тело считается пустым словарём."""
         if not request.get_data():
             return {}
         data = request.get_json(force=True, silent=True)
@@ -106,7 +111,7 @@ def create_app(config: dict | None = None) -> Flask:
             )
         return session.engine
 
-    # -- обработка ошибок ---------------------------------------------------
+    # Обработка ошибок: клиент всегда получает JSON, а не страницу с трассировкой
 
     @app.errorhandler(ApiError)
     def handle_api_error(err: ApiError):
@@ -126,63 +131,72 @@ def create_app(config: dict | None = None) -> Flask:
         app.logger.exception("Необработанная ошибка в %s", request.path)
         return jsonify(error="Внутренняя ошибка сервера.", code="internal"), 500
 
-    # -- страница -----------------------------------------------------------
+    # Страница
 
     @app.get("/")
     def index():
         return render_template("index.html")
 
-    # -- API ----------------------------------------------------------------
+    # API
 
     @app.post("/api/instance")
     def api_instance():
         """Создаёт задачу: {"n": 20, "seed": 42} или {"cities": [[x, y], ...]}."""
-        cities, seed = parse_instance_request(json_body())
+        instance, seed = parse_instance_request(json_body())
         sid = request.headers.get(SESSION_HEADER)
         session = store.get(sid)
-        if session is None:  # первый запрос или устаревший id -> новая сессия
+        if session is None:  # первый запрос или устаревший id, начинаем новую сессию
             sid, session = store.create()
         with session.lock:
-            session.cities = cities
+            session.instance = instance
             session.params = None
-            session.engine = None  # новая задача -> старый движок не нужен
-        return jsonify(session_id=sid, n=len(cities), cities=cities, seed=seed)
+            session.engine = None  # задача новая, поэтому старый движок не нужен
+        return jsonify(
+            session_id=sid, n=instance.n, cities=instance.to_dict()["cities"], seed=seed
+        )
 
     @app.post("/api/init")
     def api_init():
-        """Принимает параметры, создаёт движок, возвращает снапшот итерации 0."""
+        """Принимает параметры, создаёт движок и возвращает снапшот итерации 0."""
         session = require_session()
         with session.lock:
-            if session.cities is None:
+            if session.instance is None:
                 raise ApiError("Сначала создайте задачу: /api/instance.", code="no_instance")
-            params = parse_params(json_body(), len(session.cities))
-            if params["seed"] is None:  # фиксируем seed, чтобы запуск был повторяемым
+            params = parse_params(json_body(), session.instance.n)
+            if params["seed"] is None:  # фиксируем seed, чтобы запуск можно было повторить
                 params["seed"] = secrets.randbelow(2**31)
+            try:
+                core_params = ACOParams(**params)  # запасная проверка на стороне ядра
+                engine = Engine(session.instance, core_params)
+            except NotImplementedError as err:  # например, MMAS, которого пока нет в ядре
+                raise ApiError(str(err), code="not_supported") from err
+            except ValueError as err:
+                raise ApiError(str(err)) from err
             session.params = params
-            session.engine = Engine(session.cities, params)
+            session.engine = engine
             return jsonify(
                 params=params,
-                n_cities=len(session.cities),
-                snapshot=session.engine.initial_snapshot(),
+                n_cities=session.instance.n,
+                snapshot=engine.initial_snapshot(),
             )
 
     @app.post("/api/step")
     def api_step():
-        """Одна итерация целиком; ответ — снапшот по контракту."""
+        """Выполняет одну итерацию целиком и возвращает снапшот."""
         session = require_session()
         with session.lock:
             return jsonify(require_engine(session).step())
 
     @app.post("/api/ant_step")
     def api_ant_step():
-        """Один шаг одного муравья (на неделе 1 — на заглушке)."""
+        """Делает один шаг одного муравья и возвращает событие."""
         session = require_session()
         with session.lock:
             return jsonify(require_engine(session).ant_step())
 
     @app.post("/api/reset")
     def api_reset():
-        """Сброс: движок удаляется, задача остаётся. Идемпотентно."""
+        """Удаляет движок, а задачу оставляет. Повторный вызов ничего не ломает."""
         session = store.get(request.headers.get(SESSION_HEADER))
         if session is not None:
             with session.lock:
@@ -194,8 +208,8 @@ def create_app(config: dict | None = None) -> Flask:
 
 
 def main() -> None:
-    # debug=True перезапускает сервер при сохранении файла -> словарь сессий
-    # обнуляется, и страница покажет «сессия устарела». Это нормально.
+    # При debug=True сервер перезапускается при каждом сохранении файла, и словарь
+    # сессий обнуляется. Страница в этом случае пишет, что сессия устарела. Так и задумано.
     create_app().run(debug=True)
 
 

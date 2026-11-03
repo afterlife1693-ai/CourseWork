@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Муравьиный алгоритм — задача коммивояжёра</title>
+    <title>Муравьиный алгоритм для задачи коммивояжёра</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
 <header class="topbar">
     <h1>Муравьиный алгоритм · задача коммивояжёра</h1>
-    <span class="badge" title="Пока вместо настоящего алгоритма работает заглушка: маршруты случайные">
-        движок: заглушка
+    <span class="badge" title="В core пока нет класса ACO. Маршруты строит core.construct_tour, а феромон обновляет web/core_engine.py">
+        Ant System · переходник к core
     </span>
 </header>
 
 <div class="layout">
-    <!-- ========== Левая панель: данные и параметры ========== -->
+    <!-- Левая панель: данные и параметры -->
     <aside class="panel" aria-label="Исходные данные и параметры">
         <section>
             <h2>Города</h2>
-            <p class="hint">Клик по холсту добавляет город, правая кнопка мыши по городу — удаляет.
+            <p class="hint">Клик по холсту добавляет город, правая кнопка мыши по городу удаляет его.
                 Нужно от 3 до 50 городов.</p>
 
             <div class="row">
@@ -41,7 +41,7 @@
             </div>
             <p class="hint">JSON (<code>{"cities": [[x, y], …]}</code>) или CSV с колонками x, y.</p>
 
-            <label for="cities-text">Список городов — по одному на строку: <code>x, y</code></label>
+            <label for="cities-text">Список городов, по одному на строку: <code>x, y</code></label>
             <textarea id="cities-text" rows="7" spellcheck="false" placeholder="100, 200&#10;350, 120&#10;…"></textarea>
             <button id="btn-apply-text" type="button" class="secondary">Применить список</button>
         </section>
@@ -50,44 +50,45 @@
             <h2>Параметры алгоритма</h2>
             <div class="field">
                 <label for="p-n_ants">Число муравьёв m</label>
-                <input id="p-n_ants" type="number" min="1" max="500" step="1" placeholder="= числу городов">
-                <p class="hint">Сколько муравьёв строят маршруты за одну итерацию. Больше муравьёв —
-                    шире поиск, но итерация дольше. Пусто — по одному на город.</p>
+                <input id="p-n_ants" type="number" min="1" max="500" step="1" placeholder="столько же, сколько городов">
+                <p class="hint">Сколько муравьёв строят маршруты за одну итерацию. Чем их больше, тем шире
+                    поиск, но тем дольше итерация. Если оставить поле пустым, муравьёв будет
+                    столько же, сколько городов.</p>
             </div>
             <div class="field">
-                <label for="p-alpha">α — доверие следам</label>
+                <label for="p-alpha">α: доверие следам</label>
                 <input id="p-alpha" type="number" min="0" max="10" step="0.1" value="1">
-                <p class="hint">Насколько муравьи доверяют следам феромона других муравьёв.
-                    При α = 0 следы игнорируются.</p>
+                <p class="hint">Насколько муравьи доверяют следам феромона, которые оставили другие.
+                    При α = 0 следы не учитываются.</p>
             </div>
             <div class="field">
-                <label for="p-beta">β — предпочтение близких</label>
+                <label for="p-beta">β: предпочтение близких городов</label>
                 <input id="p-beta" type="number" min="0" max="10" step="0.1" value="3">
                 <p class="hint">Насколько муравьи предпочитают близкие города.
                     При β = 0 расстояния не учитываются.</p>
             </div>
             <div class="field">
-                <label for="p-rho">ρ — испарение (0…1]</label>
+                <label for="p-rho">ρ: испарение (0 &lt; ρ ≤ 1)</label>
                 <input id="p-rho" type="number" min="0.01" max="1" step="0.01" value="0.5">
-                <p class="hint">Доля феромона, которая испаряется за итерацию. Чем больше ρ, тем быстрее
-                    колония «забывает» прошлые маршруты.</p>
+                <p class="hint">Какая доля феромона испаряется за итерацию. Чем больше ρ, тем быстрее
+                    колония забывает прошлые маршруты.</p>
             </div>
             <div class="field">
-                <label for="p-q">Q — запас феромона</label>
+                <label for="p-q">Q: запас феромона</label>
                 <input id="p-q" type="number" min="0.01" step="0.1" value="1">
-                <p class="hint">Масштаб добавки: на каждое ребро маршрута длиной L откладывается Q / L.
-                    Чем короче маршрут, тем сильнее след.</p>
+                <p class="hint">От Q зависит, сколько феромона откладывается: на каждое ребро маршрута
+                    длиной L приходится Q / L. Чем короче маршрут, тем сильнее след.</p>
             </div>
             <div class="field">
                 <label for="p-n_iter">Число итераций</label>
                 <input id="p-n_iter" type="number" min="1" max="10000" step="1" value="100">
-                <p class="hint">Сколько итераций выполнить до остановки.</p>
+                <p class="hint">Сколько итераций выполнить, прежде чем остановиться.</p>
             </div>
             <p id="params-note" class="note" hidden>Новые параметры применятся после «Сброс».</p>
         </section>
     </aside>
 
-    <!-- ========== Центр: холст и управление ========== -->
+    <!-- Центр: холст и управление -->
     <main class="stage">
         <div class="controls" role="group" aria-label="Управление">
             <button id="btn-step" type="button">Шаг</button>
@@ -103,19 +104,19 @@
         <p id="status" class="status" role="status" aria-live="polite"></p>
     </main>
 
-    <!-- ========== Правая панель: информация ========== -->
+    <!-- Правая панель: информация -->
     <aside class="panel" aria-label="Информация">
         <section>
             <h2>Ход работы</h2>
             <dl class="info">
                 <dt>Итерация</dt>
-                <dd id="info-iter">—</dd>
+                <dd id="info-iter">–</dd>
                 <dt>Лучший маршрут</dt>
-                <dd id="info-best">—</dd>
+                <dd id="info-best">–</dd>
                 <dt>Лучший за итерацию</dt>
-                <dd id="info-iter-best">—</dd>
+                <dd id="info-iter-best">–</dd>
                 <dt>Время итерации</dt>
-                <dd id="info-time">—</dd>
+                <dd id="info-time">–</dd>
                 <dt>Городов</dt>
                 <dd id="info-cities">0</dd>
             </dl>
@@ -123,9 +124,9 @@
         <section>
             <h2>Легенда</h2>
             <ul class="legend">
-                <li><span class="swatch line"></span> лучший маршрут (замкнут на старте)</li>
+                <li><span class="swatch line"></span> лучший маршрут (замкнут на стартовом городе)</li>
                 <li><span class="swatch start"></span> стартовый город маршрута</li>
-                <li><span class="swatch city"></span> город (номер с 0)</li>
+                <li><span class="swatch city"></span> город (номера идут с 0)</li>
             </ul>
         </section>
     </aside>

@@ -38,7 +38,7 @@ body {
     font-size: 12px;
 }
 
-/* три зоны: настройки | холст | информация */
+/* Три колонки: настройки, холст и информация */
 .layout {
     display: grid;
     grid-template-columns: 300px minmax(0, 1fr) 240px;
@@ -116,7 +116,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     background: #fbfbfc;
     overflow: hidden;
 }
-/* размер в CSS-пикселях; число пикселей (width/height) выставляет app.js с учётом devicePixelRatio */
+/* Здесь задан размер в CSS-пикселях. Число реальных пикселей (width и height) выставляет app.js с учётом devicePixelRatio. */
 canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
 
 .status { min-height: 1.5em; margin: 10px 0 0; color: var(--muted); }

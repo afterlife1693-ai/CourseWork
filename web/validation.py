@@ -1,8 +1,8 @@
-"""Проверка входных данных API и генерация случайных задач.
+"""Проверка входных данных API.
 
-Сервер сам проверяет всё, что приходит от клиента: проверка в браузере ничего
-не гарантирует, запрос можно отправить в обход страницы. Любая ошибка ввода
-превращается в ``ApiError`` -> ответ 400 с понятным текстом (без трассировки).
+Сервер сам проверяет всё, что приходит от клиента. Проверка в браузере ничего
+не гарантирует, потому что запрос можно отправить в обход страницы. Любая
+ошибка ввода превращается в ApiError, а тот в ответ 400 с понятным текстом.
 """
 
 from __future__ import annotations
@@ -11,17 +11,17 @@ import math
 import secrets
 from typing import Any
 
-import numpy as np
+from core.instance import TSPInstance
 
 MIN_CITIES = 3
 MAX_CITIES = 50
-COORD_LIMIT = 1e9  # защита от абсурдных координат (переполнение, потеря точности)
+COORD_LIMIT = 1e9  # слишком большие координаты портят точность вычислений
 
 VARIANTS = ("AS", "MMAS")
 
 
 class ApiError(Exception):
-    """Ошибка, которую нужно показать пользователю как JSON {"error", "code"}."""
+    """Ошибка, которую нужно показать пользователю. Клиент получает её как JSON {"error", "code"}."""
 
     def __init__(self, message: str, status: int = 400, code: str = "bad_request"):
         super().__init__(message)
@@ -30,13 +30,11 @@ class ApiError(Exception):
         self.code = code
 
 
-# ---------------------------------------------------------------------------
-# Низкоуровневые проверки чисел
-# ---------------------------------------------------------------------------
+# Проверки отдельных чисел
 
 
 def _is_number(value: Any) -> bool:
-    """Число JSON: int или float, конечное, не bool (True == 1 в Python!)."""
+    """Число из JSON: int или float, конечное. Значение bool не подходит, хотя в Python True == 1."""
     return (
         isinstance(value, (int, float))
         and not isinstance(value, bool)
@@ -45,12 +43,12 @@ def _is_number(value: Any) -> bool:
 
 
 def _get_int(data: dict, key: str, label: str, lo: int, hi: int, default: Any) -> Any:
-    """Целое из ``data[key]`` в диапазоне [lo, hi]; нет значения -> ``default``."""
+    """Целое из data[key] в диапазоне [lo, hi]. Если значения нет, возвращает default."""
     value = data.get(key)
     if value is None:
         return default
     if isinstance(value, float) and value.is_integer():
-        value = int(value)  # 20.0 из JavaScript — это тоже 20
+        value = int(value)  # JavaScript присылает 20.0, и это тоже целое число
     if isinstance(value, bool) or not isinstance(value, int):
         raise ApiError(f"Параметр «{label}» должен быть целым числом.")
     if not lo <= value <= hi:
@@ -67,7 +65,7 @@ def _get_float(
     default: float,
     lo_open: bool = False,
 ) -> float:
-    """Число из ``data[key]`` в диапазоне [lo, hi] (или (lo, hi], если lo_open)."""
+    """Число из data[key] в диапазоне [lo, hi], а при lo_open в диапазоне (lo, hi]."""
     value = data.get(key)
     if value is None:
         return default
@@ -80,16 +78,15 @@ def _get_float(
     return float(value)
 
 
-# ---------------------------------------------------------------------------
 # Города
-# ---------------------------------------------------------------------------
 
 
 def parse_cities(raw: Any) -> list[list[float]]:
-    """Проверяет список городов ``[[x, y], ...]`` и возвращает его копию.
+    """Проверяет список городов [[x, y], ...] и возвращает его копию.
 
-    Города нумеруются с нуля (как в ядре и в событиях «шаг муравья»).
-    Совпадающие города отвергаем: расстояние 0 ломает эвристику 1/d.
+    Города нумеруются с нуля, как в ядре и в событиях шага муравья.
+    Совпадающие города отклоняются: расстояние между ними равно 0,
+    а эвристика 1/d делит на это расстояние.
     """
     if not isinstance(raw, list):
         raise ApiError("Поле «cities» должно быть списком пар [x, y].")
@@ -120,50 +117,39 @@ def parse_cities(raw: Any) -> list[list[float]]:
     return cities
 
 
-def random_cities(n: int, seed: int, width: int = 1000, height: int = 700) -> list[list[int]]:
-    """Случайные города с целыми координатами; один seed -> одна и та же задача.
+def parse_instance_request(data: dict) -> tuple[TSPInstance, int | None]:
+    """Разбирает тело POST /api/instance и возвращает задачу ядра TSPInstance.
 
-    Координаты уникальны, поэтому дубликатов (и расстояний 0) не бывает.
-    """
-    rng = np.random.default_rng(seed)
-    seen: set[tuple[int, int]] = set()
-    cities: list[list[int]] = []
-    while len(cities) < n:
-        point = (int(rng.integers(0, width + 1)), int(rng.integers(0, height + 1)))
-        if point not in seen:
-            seen.add(point)
-            cities.append([point[0], point[1]])
-    return cities
+    В запросе либо {"cities": [[x, y], ...]}, либо {"n": 20, "seed": 42}.
+    Возвращает пару (задача, seed). Для явно заданных городов seed равен None.
 
-
-def parse_instance_request(data: dict) -> tuple[list[list[float]], int | None]:
-    """Разбирает тело ``POST /api/instance``.
-
-    Либо ``{"cities": [[x, y], ...]}``, либо ``{"n": 20, "seed": 42}``.
-    Возвращает (города, seed); для явно заданных городов seed равен None.
+    Случайные города строит TSPInstance.random, ту же функцию используют ядро
+    и эксперименты. Поэтому одинаковые n и seed дают одну и ту же задачу везде.
     """
     if data.get("cities") is not None:
-        return parse_cities(data["cities"]), None
+        cities = parse_cities(data["cities"])  # здесь наши понятные сообщения об ошибках
+        try:
+            return TSPInstance(cities), None
+        except ValueError as err:  # запасная проверка: то, что не пропустило само ядро
+            raise ApiError(str(err)) from err
 
     n = _get_int(data, "n", "n", MIN_CITIES, MAX_CITIES, None)
     if n is None:
         raise ApiError("Укажите либо «cities», либо «n» (число городов).")
     seed = _get_int(data, "seed", "seed", 0, 2**32 - 1, None)
     if seed is None:
-        seed = secrets.randbelow(10**6)  # сервер выбрал сам -> вернём клиенту
-    return random_cities(n, seed), seed
+        seed = secrets.randbelow(10**6)  # seed выбрал сервер, поэтому вернём его клиенту
+    return TSPInstance.random(n, seed), seed
 
 
-# ---------------------------------------------------------------------------
 # Параметры алгоритма
-# ---------------------------------------------------------------------------
 
 
 def parse_params(data: dict, n_cities: int) -> dict:
-    """Проверяет параметры ACO из ``POST /api/init`` и подставляет значения по умолчанию.
+    """Проверяет параметры из POST /api/init и подставляет значения по умолчанию.
 
-    Имена параметров — по договорённости из API.md:
-    ``n_ants, alpha, beta, rho, q, n_iter, seed, variant``.
+    Имена параметров зафиксированы в API.md:
+    n_ants, alpha, beta, rho, q, n_iter, seed, variant.
     """
     variant = data.get("variant")
     if variant is None:
